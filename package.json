@@ -1,0 +1,39 @@
+{
+  "name": "vibe-dev",
+  "version": "1.0.0",
+  "description": "Safe, collision-free AI pair programming & multi-agent Git worktree lifecycle engine for Claude Code, Cursor, Codex, and Antigravity.",
+  "type": "module",
+  "bin": {
+    "vibe-dev": "./scripts/mesa.mjs",
+    "mesa": "./scripts/mesa.mjs"
+  },
+  "scripts": {
+    "audit": "node ./scripts/mesa.mjs auditar --repo .",
+    "test": "node ./scripts/mesa.mjs --help"
+  },
+  "keywords": [
+    "vibe-coding",
+    "vibe-dev",
+    "git-worktrees",
+    "ai-agents",
+    "claude-code",
+    "cursor",
+    "codex",
+    "antigravity",
+    "anti-frankenstein",
+    "multi-agent"
+  ],
+  "author": "Gabriel Toledo (@Gabrielrtads)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gabrielrtads/vibe-dev.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Gabrielrtads/vibe-dev/issues"
+  },
+  "homepage": "https://github.com/Gabrielrtads/vibe-dev#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
