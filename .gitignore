@@ -4,3 +4,13 @@ node_modules/
 .env*
 .DS_Store
 Thumbs.db
+
+# Zero Media Bloat: Mídias vivem no Google Drive, nunca no repositório
+*.mp4
+*.mov
+*.avi
+*.mkv
+assets/*.mp4
+assets/**/*.mp4
+scratch/
+out/
