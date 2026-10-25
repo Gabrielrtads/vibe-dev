@@ -5,6 +5,7 @@
 [![Zero-Dependency](https://img.shields.io/badge/Dependencies-Zero-emerald?style=for-the-badge)](#)
 [![Multi-Agent Guard](https://img.shields.io/badge/Multi--Agent-Claude_|_Codex_|_Cursor_|_AGY-orange?style=for-the-badge)](#)
 [![Google Antigravity SDK](https://img.shields.io/badge/SDK-Google_Antigravity-4285F4?style=for-the-badge)](#)
+[![CI & Test Suite](https://github.com/Gabrielrtads/vibe-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/Gabrielrtads/vibe-dev/actions)
 
 [![GitHub stars](https://img.shields.io/github/stars/Gabrielrtads/vibe-dev?style=social)](https://github.com/Gabrielrtads/vibe-dev/stargazers)
 

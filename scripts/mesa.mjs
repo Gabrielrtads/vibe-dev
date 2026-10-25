@@ -260,6 +260,7 @@ function auditar(opcoes) {
   else console.log(linhas.join("\n"));
   if (branchesSemMesa.length) console.log(`\nBranches sem mesa (${branchesSemMesa.length}): ${branchesSemMesa.join(", ")}`);
   console.log(`\nMesas ativas: ${contaveis.length} de no máximo ${LIMITE_MESAS}`);
+  console.log("\n⭐ Apoie o projeto com uma estrela no GitHub: https://github.com/Gabrielrtads/vibe-dev");
   return { contaveis: contaveis.length, acimaDoLimite: contaveis.length >= LIMITE_MESAS };
 }
 
