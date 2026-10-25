@@ -1,9 +1,9 @@
 ---
 name: vibe-dev
 version: 1.1.0
-description: "Safe, collision-free AI pair programming & multi-agent Git worktree lifecycle engine for Claude Code, Cursor, Codex, and Antigravity. Features Snapshot-Driven Development, Anti-Frankenstein rollback rules, concurrent atomic file locks, Windows junction links, and native Google Antigravity SDK tools."
+description: "Safe, collision-free AI pair programming & multi-agent Git worktree lifecycle engine for Claude Code, Cursor, Codex, and Antigravity. Features Snapshot-Driven Development, rollback-guard rollback rules, concurrent atomic file locks, Windows junction links, and native Google Antigravity SDK tools."
 category: devops
-tags: [vibe-coding, git-worktrees, ai-agents, multi-agent, anti-frankenstein, snapshot-driven, claude, codex, cursor, antigravity, google-antigravity-sdk]
+tags: [vibe-coding, git-worktrees, ai-agents, multi-agent, rollback-guard, snapshot-driven, claude, codex, cursor, antigravity, google-antigravity-sdk]
 ---
 
 # 🛡️ Vibe-Dev (`vibe-dev`)
@@ -17,7 +17,7 @@ In multi-agent and Vibe Coding environments, AI agents (Claude Code, Cursor, Ope
 1. **Open a Table (Worktree):** The agent works in an isolated directory cloned from stable baseline;
 2. **Edit Only on the Table:** The `main` branch remains untouched and deployable at all times;
 3. **Snapshot-Driven Development:** Micro-commits at every stable functional milestone;
-4. **Anti-Frankenstein Rollback:** If broken, rollback immediately within 1 turn instead of stacking hacks;
+4. **rollback-guard Rollback:** If broken, rollback immediately within 1 turn instead of stacking hacks;
 5. **Close & Cleanup:** Verify tests, merge cleanly, and tear down the worktree with resilient EPERM retry.
 
 ---
@@ -50,7 +50,7 @@ The agent navigates to `<repo>/.worktrees/<slug>` and performs all work there.
   ```bash
   git commit -m "feat(module): describe what and why" --trailer "Agent=<agent-id>"
   ```
-* **Anti-Frankenstein Rule (1-Turn Rollback):** If an implementation attempts break the application and is not resolved within 1 turn, **never stack patches on corrupted code**. Rollback immediately to the last working commit (`git checkout .` or `git revert`) and restart with fresh premises.
+* **rollback-guard Rule (1-Turn Rollback):** If an implementation attempts break the application and is not resolved within 1 turn, **never stack patches on corrupted code**. Rollback immediately to the last working commit (`git checkout .` or `git revert`) and restart with fresh premises.
 
 ### 4. Deliver & Verify
 Run smoke tests and build checks inside the worktree (`npm run build`, `npm test`, `pytest`, etc.). Because `node_modules` / `.venv` are linked via junctions, tests run immediately without duplicate installs.
