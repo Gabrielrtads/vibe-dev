@@ -1,9 +1,9 @@
 ---
 name: vibe-dev
-version: 1.0.0
-description: "Safe, collision-free AI pair programming & multi-agent Git worktree lifecycle engine for Claude Code, Cursor, Codex, and Antigravity. Features Snapshot-Driven Development and Anti-Frankenstein rollback rules."
+version: 1.1.0
+description: "Safe, collision-free AI pair programming & multi-agent Git worktree lifecycle engine for Claude Code, Cursor, Codex, and Antigravity. Features Snapshot-Driven Development, Anti-Frankenstein rollback rules, concurrent atomic file locks, Windows junction links, and native Google Antigravity SDK tools."
 category: devops
-tags: [vibe-coding, git-worktrees, ai-agents, multi-agent, anti-frankenstein, snapshot-driven, claude, codex, cursor, antigravity]
+tags: [vibe-coding, git-worktrees, ai-agents, multi-agent, anti-frankenstein, snapshot-driven, claude, codex, cursor, antigravity, google-antigravity-sdk]
 ---
 
 # 🛡️ Vibe-Dev (`vibe-dev`)
@@ -18,7 +18,7 @@ In multi-agent and Vibe Coding environments, AI agents (Claude Code, Cursor, Ope
 2. **Edit Only on the Table:** The `main` branch remains untouched and deployable at all times;
 3. **Snapshot-Driven Development:** Micro-commits at every stable functional milestone;
 4. **Anti-Frankenstein Rollback:** If broken, rollback immediately within 1 turn instead of stacking hacks;
-5. **Close & Cleanup:** Verify tests, merge cleanly, and tear down the worktree.
+5. **Close & Cleanup:** Verify tests, merge cleanly, and tear down the worktree with resilient EPERM retry.
 
 ---
 
@@ -38,7 +38,7 @@ npx skills add Gabrielrtads/vibe-dev
 ```bash
 npx vibe-dev criar --repo <path> --branch task/<slug>-<YYYYMMDD> --dono <agent-id> --objetivo "<task summary>"
 ```
-*Creates an isolated worktree under `<repo>/.worktrees/<slug>` and registers the task in the central registry.*
+*Creates an isolated worktree under `<repo>/.worktrees/<slug>`, automatically binds `node_modules` and `.venv` via Windows Directory Junctions (saving SSD space and allowing instant tests), and safely registers the task using atomic file locks.*
 
 ### 2. Edit Exclusively in the Table Directory
 The agent navigates to `<repo>/.worktrees/<slug>` and performs all work there.
@@ -53,13 +53,32 @@ The agent navigates to `<repo>/.worktrees/<slug>` and performs all work there.
 * **Anti-Frankenstein Rule (1-Turn Rollback):** If an implementation attempts break the application and is not resolved within 1 turn, **never stack patches on corrupted code**. Rollback immediately to the last working commit (`git checkout .` or `git revert`) and restart with fresh premises.
 
 ### 4. Deliver & Verify
-Run smoke tests and build checks inside the worktree (`npm run build`, `pytest`, etc.). Only request merge into `main` after presenting fresh, reproducible evidence.
+Run smoke tests and build checks inside the worktree (`npm run build`, `npm test`, `pytest`, etc.). Because `node_modules` / `.venv` are linked via junctions, tests run immediately without duplicate installs.
 
 ### 5. Tear Down the Table (`desmontar`)
 ```bash
 npx vibe-dev desmontar --repo <path> --branch task/<slug>-<YYYYMMDD> --dono <agent-id>
 ```
-*Tears down the temporary worktree and removes the branch, keeping your project clean and ready for continuous deployment.*
+*Safely unlinks dependencies, unlinks the temporary worktree with backoff retry (resilient to Windows EPERM / locked file handles), and removes the branch.*
+
+---
+
+## 🐍 Google Antigravity SDK Integration (Python)
+
+If you are developing agents with the **Google Antigravity SDK** (`google-antigravity`), use the native Python connector:
+
+```python
+from vibe_dev_sdk import abrir_mesa, desmontar_mesa, auditar_mesas, MesaCriarInput
+
+# Use directly inside your Antigravity agent or as an @agent.tool:
+resultado = abrir_mesa(MesaCriarInput(
+    branch="task/feature-billing-20261025",
+    dono="gemini-local",
+    objetivo="Implementar webhook Asaas",
+    repo="."
+))
+print(resultado)
+```
 
 ---
 

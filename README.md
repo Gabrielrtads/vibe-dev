@@ -1,9 +1,14 @@
-# 🛡️ Vibe-Dev (`vibe-dev`)
+# 🛡️ Vibe-Dev (`vibe-dev`) v1.1.0
 
 [![skills.sh compatible](https://img.shields.io/badge/skills.sh-compatible-6366f1?style=for-the-badge)](https://skills.sh)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 [![Zero-Dependency](https://img.shields.io/badge/Dependencies-Zero-emerald?style=for-the-badge)](#)
 [![Multi-Agent Guard](https://img.shields.io/badge/Multi--Agent-Claude_|_Codex_|_Cursor_|_AGY-orange?style=for-the-badge)](#)
+[![Google Antigravity SDK](https://img.shields.io/badge/SDK-Google_Antigravity-4285F4?style=for-the-badge)](#)
+
+[![GitHub stars](https://img.shields.io/github/stars/Gabrielrtads/vibe-dev?style=social)](https://github.com/Gabrielrtads/vibe-dev/stargazers)
+
+> ⭐ **If this tool saved you time or empowered your AI agents, please star this repository! It helps more developers discover the project.**
 
 > **The Safe, Collision-Free Git Worktree & Lifecycle Engine for AI Pair Programming.**  
 > Prevent AI agents from hallucinating, overwriting code, or destroying your production branch.
@@ -16,13 +21,13 @@ When delegating development to AI agents (Claude Code, Cursor, OpenAI Codex, Ant
 1. **Agents destroy the `main` branch:** AI writes incomplete code directly on production, triggering automatic cloud builds (Vercel, Netlify) that crash your site.
 2. **Multi-agent collisions:** Two AI agents editing the same repository at the same time overwrite each other's work silently.
 3. **The Frankenstein Effect:** When an AI makes a mistake, it tends to pile hack after hack on top of broken code, creating an un-debuggable nightmare.
-4. **Orphan work:** Interrupted agent sessions leave dirty files, lost commits, and abandoned branches everywhere.
+4. **Orphan work & Lockups:** Interrupted agent sessions leave dirty files, lost commits, and Windows file lockups (EPERM).
 
 ---
 
 ## 💡 The Solution: Deterministic Workbenches (`vibe-dev`)
 
-`vibe-dev` gives every AI agent an isolated, temporary **Workbench ("Mesa")** powered by native Git Worktrees:
+`vibe-dev` gives every AI agent an isolated, temporary **Workbench ("Mesa")** powered by native Git Worktrees with automatic dependency junctions:
 
 ```
 [Production / main Branch] ── (Protected & Clean at all times)
@@ -30,10 +35,10 @@ When delegating development to AI agents (Claude Code, Cursor, OpenAI Codex, Ant
        ├───> Claude Table   (.worktrees/task-ui-20261020)   ──> Atomic commits ──┐
        │                                                                         │
        └───> Codex Table    (.worktrees/task-api-20261020)  ──> Atomic commits ──┤
-                                                                                 ▼
-                                                          [CI / Smoke Tests Pass]
-                                                                                 ▼
-                                                          [Merge to main & Cleanup]
+                                                                                  ▼
+                                                           [CI / Smoke Tests Pass]
+                                                                                  ▼
+                                                           [Merge to main & Cleanup]
 ```
 
 ---
@@ -52,11 +57,28 @@ Or run via `npx`:
 # Audit active tables and orphans
 npx vibe-dev auditar --repo .
 
-# Create a new isolated table
+# Create a new isolated table (with automatic node_modules/.venv junctions & atomic lockfile)
 npx vibe-dev criar --repo . --branch task/feature-auth-20261020 --dono claude-local --objetivo "Setup Stripe checkout"
 
-# Teardown after verified merge
+# Teardown after verified merge (resilient retry against Windows EPERM)
 npx vibe-dev desmontar --repo . --branch task/feature-auth-20261020 --dono claude-local
+```
+
+---
+
+## 🐍 Google Antigravity SDK & Python Integration
+
+For Python-based autonomous agents using `google-antigravity`:
+
+```python
+from vibe_dev_sdk import abrir_mesa, desmontar_mesa, auditar_mesas, MesaCriarInput
+
+# Open a collision-free table directly inside your Agent workflow:
+abrir_mesa(MesaCriarInput(
+    branch="task/backend-auth-20261025",
+    dono="gemini-local",
+    objetivo="Criar endpoints de autenticação"
+))
 ```
 
 ---
@@ -64,7 +86,7 @@ npx vibe-dev desmontar --repo . --branch task/feature-auth-20261020 --dono claud
 ## 🛠️ The 5 Golden Rules of Vibe-Dev
 
 ### 1. 🪑 Open a Workbench Table (`criar`)
-Always work inside `.worktrees/<slug>` cloned from the updated baseline. The `main` branch remains untouched.
+Always work inside `.worktrees/<slug>` cloned from the updated baseline. The `main` branch remains untouched. Dependencies are automatically bound via Windows directory junctions (instant testing, zero wasted disk space).
 
 ### 2. 🔒 Edit Exclusively in the Table Directory
 The agent must never touch files in the root repository while working on a feature.
@@ -84,7 +106,7 @@ git commit -m "feat(auth): add OAuth2 provider" --trailer "Agent=claude-local"
 If an implementation breaks the code and is not fixed within **1 turn**, **never stack patches on corrupted code**. Rollback immediately to the last working micro-commit (`git checkout .`) and restart from a stable state.
 
 ### 5. 🧹 Teardown & Clean (`desmontar`)
-Once smoke tests pass and merge is authorized, tear down the worktree. No zombie branches left behind.
+Once smoke tests pass and merge is authorized, tear down the worktree. Built-in backoff retry handles Windows file handles gracefully.
 
 ---
 

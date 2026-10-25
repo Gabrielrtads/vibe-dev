@@ -140,6 +140,88 @@ function contidaNaBase(repo, branch, base) {
   return cherry !== null && !cherry.split(/\r?\n/).some((l) => l.startsWith("+"));
 }
 
+function comLockRegistro(arquivoRegistro, callback) {
+  const lockfile = `${arquivoRegistro}.lock`;
+  const maxTentativas = 30;
+  const esperaMs = 120;
+  let fd = null;
+
+  for (let tentativa = 0; tentativa < maxTentativas; tentativa++) {
+    try {
+      fd = fs.openSync(lockfile, "wx");
+      break;
+    } catch (err) {
+      if (err.code === "EEXIST") {
+        try {
+          const stats = fs.statSync(lockfile);
+          if (Date.now() - stats.mtimeMs > 15000) {
+            fs.unlinkSync(lockfile);
+            continue;
+          }
+        } catch {}
+        const sleep = esperaMs + Math.floor(Math.random() * 40);
+        const fim = Date.now() + sleep;
+        while (Date.now() < fim) {}
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  if (fd === null) {
+    throw new Error(`Timeout ao aguardar lock do registro (${lockfile}). Outro agente está gravando.`);
+  }
+
+  try {
+    return callback();
+  } finally {
+    try { fs.closeSync(fd); } catch {}
+    try { fs.unlinkSync(lockfile); } catch {}
+  }
+}
+
+function vincularDependencias(raiz, destino) {
+  const pastasParaVincular = ["node_modules", ".venv", "venv"];
+  for (const pasta of pastasParaVincular) {
+    const origemPath = path.join(raiz, pasta);
+    const destinoPath = path.join(destino, pasta);
+    if (fs.existsSync(origemPath) && !fs.existsSync(destinoPath)) {
+      try {
+        const tipo = process.platform === "win32" ? "junction" : "dir";
+        fs.symlinkSync(origemPath, destinoPath, tipo);
+      } catch {}
+    }
+  }
+}
+
+function desvincularDependencias(caminhoMesa) {
+  const pastas = ["node_modules", ".venv", "venv"];
+  for (const p of pastas) {
+    const itemPath = path.join(caminhoMesa, p);
+    try {
+      const stats = fs.lstatSync(itemPath);
+      if (stats.isSymbolicLink()) {
+        fs.unlinkSync(itemPath);
+      }
+    } catch {}
+  }
+}
+
+function desmontarComRetry(raiz, caminhoMesa, maxTentativas = 4) {
+  desvincularDependencias(caminhoMesa);
+  for (let tentativa = 1; tentativa <= maxTentativas; tentativa++) {
+    try {
+      git(raiz, ["worktree", "remove", "--force", caminhoMesa]);
+      return;
+    } catch (err) {
+      if (tentativa === maxTentativas) throw err;
+      const sleep = 300 * Math.pow(2, tentativa - 1);
+      const fim = Date.now() + sleep;
+      while (Date.now() < fim) {}
+    }
+  }
+}
+
 function auditar(opcoes) {
   const { raiz, mesas } = listarMesas(opcoes.repo);
   atualizarBase(raiz, opcoes.base);
@@ -194,29 +276,31 @@ function desmontar(opcoes) {
     throw new Error(`Recusado: a mesa tem ${sujos.length} arquivo(s) não salvos. Use --salvar-sujo <pasta> ou descarte manualmente.`);
   }
 
-  git(raiz, ["worktree", "remove", "--force", mesa.caminho]);
+  desmontarComRetry(raiz, mesa.caminho);
   git(raiz, ["branch", "-d", branch], { permitirFalha: true });
   console.log(`Mesa desmontada com sucesso: ${branch}`);
   return { desmontada: true };
 }
 
 function registrarTarefa(arquivo, linha) {
-  let texto = "";
-  if (fs.existsSync(arquivo)) {
-    texto = fs.readFileSync(arquivo, "utf8");
-  } else {
-    fs.mkdirSync(path.dirname(arquivo), { recursive: true });
-    texto = `# Registro Central de Tarefas\n\n## Tarefas vigentes\n\n| Task ID | Repo | Worktree | Branch | Base | Executor atual | Estado | Último checkpoint |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n`;
-  }
-  const linhas = texto.split("\n");
-  const secao = linhas.findIndex((l) => /^##\s+Tarefas vigentes/.test(l));
-  let fimTabela = -1;
-  if (secao >= 0) {
-    for (let i = secao + 1; i < linhas.length && !/^##\s/.test(linhas[i]); i++) if (linhas[i].startsWith("|")) fimTabela = i;
-  }
-  if (fimTabela >= 0) linhas.splice(fimTabela + 1, 0, linha);
-  else linhas.splice(linhas.length - (linhas.at(-1) === "" ? 1 : 0), 0, linha);
-  fs.writeFileSync(arquivo, linhas.join("\n"), "utf8");
+  comLockRegistro(arquivo, () => {
+    let texto = "";
+    if (fs.existsSync(arquivo)) {
+      texto = fs.readFileSync(arquivo, "utf8");
+    } else {
+      fs.mkdirSync(path.dirname(arquivo), { recursive: true });
+      texto = `# Registro Central de Tarefas\n\n## Tarefas vigentes\n\n| Task ID | Repo | Worktree | Branch | Base | Executor atual | Estado | Último checkpoint |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n`;
+    }
+    const linhas = texto.split("\n");
+    const secao = linhas.findIndex((l) => /^##\s+Tarefas vigentes/.test(l));
+    let fimTabela = -1;
+    if (secao >= 0) {
+      for (let i = secao + 1; i < linhas.length && !/^##\s/.test(linhas[i]); i++) if (linhas[i].startsWith("|")) fimTabela = i;
+    }
+    if (fimTabela >= 0) linhas.splice(fimTabela + 1, 0, linha);
+    else linhas.splice(linhas.length - (linhas.at(-1) === "" ? 1 : 0), 0, linha);
+    fs.writeFileSync(arquivo, linhas.join("\n"), "utf8");
+  });
 }
 
 function criar(opcoes) {
@@ -240,6 +324,8 @@ function criar(opcoes) {
   }
 
   git(raiz, ["worktree", "add", "-q", "-b", branch, destino, sha]);
+  vincularDependencias(raiz, destino);
+
   const repoNome = path.basename(raiz);
   const data = new Date().toLocaleDateString("sv-SE");
   const linha = `| \`TASK-${slug.toUpperCase()}\` | \`${repoNome}\` | \`${repoNome}/.worktrees/${slug}\` | \`${branch}\` | \`${opcoes.base}@${sha.slice(0, 7)}\` | \`${opcoes.dono}\` | \`ACTIVE\` | ${data}: ${opcoes.objetivo.replaceAll("|", "/")} |`;
@@ -247,7 +333,7 @@ function criar(opcoes) {
   try {
     registrarTarefa(opcoes.registro, linha);
   } catch (erro) {
-    git(raiz, ["worktree", "remove", "--force", destino], { permitirFalha: true });
+    desmontarComRetry(raiz, destino);
     git(raiz, ["branch", "-D", branch], { permitirFalha: true });
     throw new Error(`Recusado: não consegui registrar a tarefa (${erro.message}); a mesa foi desfeita.`);
   }
@@ -258,7 +344,7 @@ function criar(opcoes) {
 
 const opcoes = lerArgs(process.argv.slice(2));
 if (!opcoes.repo || !["auditar", "desmontar", "mover", "criar"].includes(opcoes.comando)) {
-  console.log("🧭 vibe-dev (mesa.mjs) v1.0.0");
+  console.log("🧭 vibe-dev (mesa.mjs) v1.1.0");
   console.log("Uso: node scripts/mesa.mjs <auditar|criar|desmontar|mover> --repo <caminho> [--branch <nome>] [--dono <agente>] [--objetivo <frase>]");
   process.exit(0);
 }

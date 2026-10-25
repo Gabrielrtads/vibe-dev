@@ -1,6 +1,6 @@
 {
   "name": "vibe-dev",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Safe, collision-free AI pair programming & multi-agent Git worktree lifecycle engine for Claude Code, Cursor, Codex, and Antigravity.",
   "type": "module",
   "bin": {
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "audit": "node ./scripts/mesa.mjs auditar --repo .",
-    "test": "node ./scripts/mesa.mjs --help"
+    "test": "node --test ./scripts/mesa.test.mjs"
   },
   "keywords": [
     "vibe-coding",
