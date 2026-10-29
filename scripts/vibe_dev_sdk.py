@@ -7,11 +7,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
+
+try:
+    from pydantic import field_validator
+except ImportError:  # pydantic v1
+    from pydantic import validator as field_validator
 
 # Ensure UTF-8 output on Windows consoles to prevent cp1252 UnicodeEncodeError
 if sys.platform == "win32":
@@ -49,6 +55,22 @@ def _get_mesa_script_path() -> Path:
         return workspace_mesa
     
     return mesa_script
+
+
+# Mesmo critério do mesa.mjs: "base" vira argumento do git, então só "<remoto>/<ref>" ou "<ref>",
+# com segmentos que não começam por "-" ou "." (bloqueia "--upload-pack=...", "ext::...").
+_BASE_VALIDA = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*")
+
+
+def _validar_base(base: str) -> str:
+    if (
+        not isinstance(base, str)
+        or not _BASE_VALIDA.fullmatch(base)
+        or ".." in base
+        or base.endswith((".", ".lock"))
+    ):
+        raise ValueError(f"base inválida: {base!r}. Use <remoto>/<branch> (ex.: origin/main).")
+    return base
 
 
 def _run_node_command(args: List[str], cwd: Optional[str] = None) -> str:
@@ -94,6 +116,11 @@ class MesaCriarInput(BaseModel):
         description="Branch base de referência atualizada (padrão: 'origin/main')"
     )
 
+    @field_validator("base")
+    @classmethod
+    def _base_segura(cls, v: str) -> str:
+        return _validar_base(v)
+
 
 class MesaDesmontarInput(BaseModel):
     branch: str = Field(
@@ -128,6 +155,11 @@ class MesaAuditarInput(BaseModel):
         description="Branch base de referência"
     )
 
+    @field_validator("base")
+    @classmethod
+    def _base_segura(cls, v: str) -> str:
+        return _validar_base(v)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent Tools (Google Antigravity SDK Compliant)
@@ -146,7 +178,7 @@ def abrir_mesa(params: MesaCriarInput) -> str:
         "--branch", params.branch,
         "--dono", params.dono,
         "--objetivo", params.objetivo,
-        "--base", params.base
+        "--base", _validar_base(params.base)
     ]
     return _run_node_command(args)
 
@@ -179,7 +211,7 @@ def auditar_mesas(params: MesaAuditarInput) -> str:
     args = [
         "auditar",
         "--repo", params.repo,
-        "--base", params.base
+        "--base", _validar_base(params.base)
     ]
     if params.dono:
         args.extend(["--dono", params.dono])

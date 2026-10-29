@@ -7,6 +7,7 @@
 //   node scripts/mesa.mjs criar     --repo <caminho> --branch task/<slug>-<AAAAMMDD> --dono <agente> --objetivo "<frase>"
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,8 @@ const LIMITE_MESAS = 5;
 const PROTEGIDAS = new Set(["main", "master", "integracao"]);
 const NOME_DE_AGENTE = /^(codex|claude|gemini)\/.+$|^agente\/(claude|gemini|codex)(\/.+)?$/;
 const AGENTE = /\b(?:claude|codex|gemini)-(?:local|vps)\b|[a-z0-9_-]+/i;
+// --base vira argumento do git: só "<remoto>/<ref>" ou "<ref>", com segmentos que não começam por "-" ou "." (bloqueia --upload-pack=..., ext::...).
+const BASE_VALIDA = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
 
 function resolverRegistroPadrao(repo) {
   const candidatos = [
@@ -97,11 +100,21 @@ function ignoradosImportantes(caminho, raizPrincipal = caminho) {
   });
 }
 
+function validarBase(base) {
+  if (typeof base !== "string" || !BASE_VALIDA.test(base) || base.includes("..") || base.endsWith(".") || base.endsWith(".lock")) {
+    throw new Error(`Recusado: --base inválida ${JSON.stringify(base ?? "")}. Use <remoto>/<branch> (ex.: origin/main).`);
+  }
+  return base;
+}
+
 function atualizarBase(raiz, base) {
-  const [remoto, ...resto] = base.split("/");
+  const [remoto, ...resto] = validarBase(base).split("/");
   const ref = resto.join("/");
   if (!remoto || !ref) return;
-  git(raiz, ["fetch", "--quiet", remoto, ref], { permitirFalha: true });
+  // Só busca de remotos já configurados; nunca deixa a base escolher a URL/transporte.
+  const remotos = (git(raiz, ["remote"], { permitirFalha: true }) || "").split(/\r?\n/).filter(Boolean);
+  if (!remotos.includes(remoto)) return;
+  git(raiz, ["fetch", "--quiet", "--", remoto, ref], { permitirFalha: true });
 }
 
 function lerRegistro(arquivo) {
@@ -127,7 +140,7 @@ function lerRegistro(arquivo) {
 }
 
 function assinaturas(repo, branch, base) {
-  const ids = (git(repo, ["log", "--format=%(trailers:key=Agent,valueonly,separator=%x0A)", `${base}..${branch}`], { permitirFalha: true }) || "")
+  const ids = (git(repo, ["log", "--format=%(trailers:key=Agent,valueonly,separator=%x0A)", "--end-of-options", `${base}..${branch}`], { permitirFalha: true }) || "")
     .split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const contagem = {};
   for (const id of ids) contagem[id] = (contagem[id] || 0) + 1;
@@ -135,8 +148,8 @@ function assinaturas(repo, branch, base) {
 }
 
 function contidaNaBase(repo, branch, base) {
-  if (git(repo, ["merge-base", "--is-ancestor", branch, base], { permitirFalha: true }) !== null) return true;
-  const cherry = git(repo, ["cherry", base, branch], { permitirFalha: true });
+  if (git(repo, ["merge-base", "--is-ancestor", "--end-of-options", branch, base], { permitirFalha: true }) !== null) return true;
+  const cherry = git(repo, ["cherry", "--end-of-options", base, branch], { permitirFalha: true });
   return cherry !== null && !cherry.split(/\r?\n/).some((l) => l.startsWith("+"));
 }
 
@@ -319,7 +332,7 @@ function criar(opcoes) {
   if (fs.existsSync(destino)) throw new Error(`Recusado: a pasta ${destino} já existe.`);
   atualizarBase(raiz, opcoes.base);
   
-  let sha = git(raiz, ["rev-parse", "--verify", `${opcoes.base}^{commit}`], { permitirFalha: true });
+  let sha = git(raiz, ["rev-parse", "--verify", "--end-of-options", `${opcoes.base}^{commit}`], { permitirFalha: true });
   if (!sha) {
     sha = git(raiz, ["rev-parse", "--verify", `HEAD^{commit}`]);
   }
@@ -352,6 +365,7 @@ if (!opcoes.repo || !["auditar", "desmontar", "mover", "criar"].includes(opcoes.
 
 try {
   const acoes = { auditar, desmontar, criar };
+  validarBase(opcoes.base);
   const resultado = acoes[opcoes.comando](opcoes);
   process.exit(opcoes.comando === "auditar" && resultado?.acimaDoLimite ? 3 : 0);
 } catch (erro) {

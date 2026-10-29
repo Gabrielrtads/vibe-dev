@@ -9,7 +9,7 @@
   },
   "scripts": {
     "audit": "node ./scripts/mesa.mjs auditar --repo .",
-    "test": "node --test ./scripts/mesa.test.mjs"
+    "test": "node --test ./scripts/mesa.test.mjs && python -B -m unittest discover -s scripts -p \"test_*.py\""
   },
   "keywords": [
     "vibe-coding",

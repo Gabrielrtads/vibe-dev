@@ -27,8 +27,8 @@ function criarAmbienteRepo() {
   execFileSync("git", ["-C", raiz, "add", "."]);
   execFileSync("git", ["-C", raiz, "commit", "-qm", "commit inicial de teste"]);
 
-  const rodarMesa = (args = []) => {
-    const env = { ...process.env, PATH: PATH_BASE.join(";") };
+  const rodarMesa = (args = [], envExtra = {}) => {
+    const env = { ...process.env, PATH: PATH_BASE.join(";"), ...envExtra };
     const r = spawnSync(
       "node",
       [SCRIPT, ...args],
@@ -125,4 +125,52 @@ test("mesa desmontar: desvincula junctions e remove worktree com sucesso", () =>
   assert.match(rDesmontar.saida, /Mesa desmontada com sucesso/);
   assert.equal(fs.existsSync(pastaMesa), false, "Pasta da worktree deve ser removida");
   assert.equal(fs.existsSync(nodeModulesPath), true, "node_modules original NUNCA deve ser apagado!");
+});
+
+function criarMesa(rodarMesa, raiz, slug) {
+  const registroPath = path.join(raiz, "TASK_REGISTRY.md");
+  const r = rodarMesa([
+    "criar",
+    "--repo", raiz,
+    "--branch", `task/${slug}`,
+    "--dono", "claude-local",
+    "--objetivo", "Teste de seguranca",
+    "--registro", registroPath
+  ]);
+  assert.equal(r.codigo, 0, `Criar mesa falhou: ${r.saida}`);
+  return path.join(raiz, ".worktrees", slug);
+}
+
+test("seguranca --base: recusa injecao de argumento no git fetch (criar e auditar)", () => {
+  const { raiz, rodarMesa } = criarAmbienteRepo();
+  const registroPath = path.join(raiz, "TASK_REGISTRY.md");
+  const marcador = path.join(os.tmpdir(), `vibe-dev-pwned-${path.basename(raiz)}`);
+  // PATH completo: com o PATH reduzido da suíte o git não consegue abrir o shell e o ataque não seria exercitado.
+  const env = { MARCADOR_PWNED: marcador, PATH: process.env.PATH };
+  // O primeiro segmento vira o "remoto" do git fetch: sem validação, o git executa o --upload-pack.
+  const malicioso = `--upload-pack=node -e "require('fs').writeFileSync(process.env.MARCADOR_PWNED,'x')"/.`;
+
+  const rCriar = rodarMesa([
+    "criar", "--repo", raiz, "--branch", "task/injecao-20261029", "--dono", "claude-local",
+    "--objetivo", "Teste de injecao", "--registro", registroPath, "--base", malicioso
+  ], env);
+  assert.equal(fs.existsSync(marcador), false, "O git NUNCA pode executar comando vindo de --base");
+  assert.equal(rCriar.codigo, 1, `Criar com --base malicioso deveria ser recusado: ${rCriar.saida}`);
+  assert.match(rCriar.saida, /--base inválida/);
+  assert.equal(fs.existsSync(path.join(raiz, ".worktrees", "injecao-20261029")), false, "Nenhuma mesa pode ser criada");
+
+  const rAuditar = rodarMesa(["auditar", "--repo", raiz, "--registro", registroPath, "--base", malicioso], env);
+  assert.equal(fs.existsSync(marcador), false, "O git NUNCA pode executar comando vindo de --base");
+  assert.equal(rAuditar.codigo, 1, `Auditar com --base malicioso deveria ser recusado: ${rAuditar.saida}`);
+
+  for (const base of ["ext::sh -c touch% /tmp/x/main", "origin/-x", "origin/../main", "-origin/main"]) {
+    const r = rodarMesa(["auditar", "--repo", raiz, "--registro", registroPath, "--base", base]);
+    assert.equal(r.codigo, 1, `--base '${base}' deveria ser recusada: ${r.saida}`);
+  }
+});
+
+test("seguranca --base: base bem formada com remoto inexistente nao quebra o fluxo local", () => {
+  const { raiz, rodarMesa } = criarAmbienteRepo();
+  const r = rodarMesa(["auditar", "--repo", raiz, "--registro", path.join(raiz, "TASK_REGISTRY.md"), "--base", "upstream/release/v2"]);
+  assert.equal(r.codigo, 0, `Base bem formada deveria ser aceita: ${r.saida}`);
 });
