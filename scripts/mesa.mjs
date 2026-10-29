@@ -2,11 +2,12 @@
 // Comando único e seguro para auditar e desmontar mesas (branch + worktree).
 // Uso:
 //   node scripts/mesa.mjs auditar   --repo <caminho> [--base origin/main] [--dono <seu-id>]
-//   node scripts/mesa.mjs desmontar --repo <caminho> --branch <nome> [--base origin/main] [--arquivar] [--salvar-sujo <pasta>]
+//   node scripts/mesa.mjs desmontar --repo <caminho> --branch <nome> [--arquivar] [--salvar-sujo <pasta>] [--descartar-ignorados]
 //   node scripts/mesa.mjs mover     --repo <caminho> --branch task/<slug>-<AAAAMMDD>
 //   node scripts/mesa.mjs criar     --repo <caminho> --branch task/<slug>-<AAAAMMDD> --dono <agente> --objetivo "<frase>"
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,10 @@ const LIMITE_MESAS = 5;
 const PROTEGIDAS = new Set(["main", "master", "integracao"]);
 const NOME_DE_AGENTE = /^(codex|claude|gemini)\/.+$|^agente\/(claude|gemini|codex)(\/.+)?$/;
 const AGENTE = /\b(?:claude|codex|gemini)-(?:local|vps)\b|[a-z0-9_-]+/i;
+// --base vira argumento do git: só "<remoto>/<ref>" ou "<ref>", com segmentos que não começam por "-" ou "." (bloqueia --upload-pack=..., ext::...).
+const BASE_VALIDA = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
+// O maxBuffer padrão (1MB) estoura (ENOBUFS) em mesas com muitos arquivos; ainda assim, erro nunca vale como "limpo".
+const MAX_SAIDA_GIT = 256 * 1024 * 1024;
 
 function resolverRegistroPadrao(repo) {
   const candidatos = [
@@ -29,9 +34,12 @@ function resolverRegistroPadrao(repo) {
   return path.resolve(repo || process.cwd(), "TASK_REGISTRY.md");
 }
 
-function git(cwd, args, { permitirFalha = false } = {}) {
+function git(cwd, args, { permitirFalha = false, env } = {}) {
   try {
-    return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trimEnd();
+    return execFileSync("git", ["-C", cwd, ...args], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, maxBuffer: MAX_SAIDA_GIT,
+      ...(env ? { env: { ...process.env, ...env } } : {})
+    }).trimEnd();
   } catch (erro) {
     if (permitirFalha) return null;
     throw new Error(`git ${args.join(" ")} falhou: ${(erro.stderr || erro.message).trim()}`);
@@ -79,7 +87,7 @@ const ARQUIVO_DE_BUILD = /(^|\/)next-env\.d\.ts$|\.tsbuildinfo$/;
 
 function ignoradosImportantes(caminho, raizPrincipal = caminho) {
   const linhas = git(caminho, ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"], { permitirFalha: true });
-  if (linhas === null) return [];
+  if (linhas === null) return null;
   const candidatos = linhas.split(/\r?\n/).filter((l) => l.startsWith("!! ")).map((l) => l.slice(3)).filter((c) => {
     const topo = c.split("/")[0];
     return !REGENERAVEIS.has(topo) && !ARQUIVO_DE_BUILD.test(c);
@@ -97,11 +105,21 @@ function ignoradosImportantes(caminho, raizPrincipal = caminho) {
   });
 }
 
+function validarBase(base) {
+  if (typeof base !== "string" || !BASE_VALIDA.test(base) || base.includes("..") || base.endsWith(".") || base.endsWith(".lock")) {
+    throw new Error(`Recusado: --base inválida ${JSON.stringify(base ?? "")}. Use <remoto>/<branch> (ex.: origin/main).`);
+  }
+  return base;
+}
+
 function atualizarBase(raiz, base) {
-  const [remoto, ...resto] = base.split("/");
+  const [remoto, ...resto] = validarBase(base).split("/");
   const ref = resto.join("/");
   if (!remoto || !ref) return;
-  git(raiz, ["fetch", "--quiet", remoto, ref], { permitirFalha: true });
+  // Só busca de remotos já configurados; nunca deixa a base escolher a URL/transporte.
+  const remotos = (git(raiz, ["remote"], { permitirFalha: true }) || "").split(/\r?\n/).filter(Boolean);
+  if (!remotos.includes(remoto)) return;
+  git(raiz, ["fetch", "--quiet", "--", remoto, ref], { permitirFalha: true });
 }
 
 function lerRegistro(arquivo) {
@@ -127,7 +145,7 @@ function lerRegistro(arquivo) {
 }
 
 function assinaturas(repo, branch, base) {
-  const ids = (git(repo, ["log", "--format=%(trailers:key=Agent,valueonly,separator=%x0A)", `${base}..${branch}`], { permitirFalha: true }) || "")
+  const ids = (git(repo, ["log", "--format=%(trailers:key=Agent,valueonly,separator=%x0A)", "--end-of-options", `${base}..${branch}`], { permitirFalha: true }) || "")
     .split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const contagem = {};
   for (const id of ids) contagem[id] = (contagem[id] || 0) + 1;
@@ -135,8 +153,8 @@ function assinaturas(repo, branch, base) {
 }
 
 function contidaNaBase(repo, branch, base) {
-  if (git(repo, ["merge-base", "--is-ancestor", branch, base], { permitirFalha: true }) !== null) return true;
-  const cherry = git(repo, ["cherry", base, branch], { permitirFalha: true });
+  if (git(repo, ["merge-base", "--is-ancestor", "--end-of-options", branch, base], { permitirFalha: true }) !== null) return true;
+  const cherry = git(repo, ["cherry", "--end-of-options", base, branch], { permitirFalha: true });
   return cherry !== null && !cherry.split(/\r?\n/).some((l) => l.startsWith("+"));
 }
 
@@ -222,6 +240,72 @@ function desmontarComRetry(raiz, caminhoMesa, maxTentativas = 4) {
   }
 }
 
+function estaDentro(pai, filho) {
+  const rel = path.relative(pai, filho);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+// Todos os caminhos que o git status considera sujos (inclui a origem de renomeações).
+function caminhosSujos(caminho) {
+  const tokens = git(caminho, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).split("\0");
+  const caminhos = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (!tokens[i]) continue;
+    caminhos.push(tokens[i].slice(3));
+    if (/^[RC]/.test(tokens[i])) caminhos.push(tokens[++i]);
+  }
+  return caminhos;
+}
+
+// Grava TODO o trabalho não commitado (alterado, staged, novo, binário) num patch sobre o HEAD da mesa,
+// usando um index temporário para não tocar no index real. Só devolve depois de confirmar o patch.
+function salvarSujo(mesa, branch, destino) {
+  const pasta = path.resolve(destino);
+  const foraDaMesa = (p) => !estaDentro(fs.realpathSync(mesa.caminho), p);
+  if (!foraDaMesa(pasta)) throw new Error(`Recusado: --salvar-sujo aponta para dentro da mesa que seria apagada (${pasta}). Nada foi apagado.`);
+  fs.mkdirSync(pasta, { recursive: true });
+  if (!foraDaMesa(fs.realpathSync(pasta))) throw new Error(`Recusado: --salvar-sujo aponta para dentro da mesa que seria apagada (${pasta}). Nada foi apagado.`);
+
+  const head = git(mesa.caminho, ["rev-parse", "--verify", "HEAD"]);
+  const carimbo = new Date().toISOString().replace(/\D/g, "").slice(0, 17);
+  const arquivo = path.join(pasta, `${branch.replace(/[^A-Za-z0-9._-]+/g, "_")}-${head.slice(0, 7)}-${carimbo}.patch`);
+  const indice = path.join(os.tmpdir(), `vibe-dev-index-${process.pid}-${carimbo}`);
+  const env = { GIT_INDEX_FILE: indice };
+  try {
+    if (fs.existsSync(arquivo)) throw new Error(`o arquivo ${arquivo} já existe`);
+    git(mesa.caminho, ["read-tree", "HEAD"], { env });
+    git(mesa.caminho, ["add", "-A"], { env });
+    git(mesa.caminho, ["diff", "--cached", "--binary", "--full-index", "--no-color", "--no-ext-diff", "--no-renames",
+      "--src-prefix=a/", "--dst-prefix=b/", `--output=${arquivo}`, "HEAD"], { env });
+
+    // Confirmação 1: cada caminho sujo do status está no patch (submódulo sujo, staged apagado etc. não passam).
+    const noPatch = new Set(git(mesa.caminho, ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"], { env }).split("\0").filter(Boolean));
+    const faltando = caminhosSujos(mesa.caminho).filter((c) => !noPatch.has(c));
+    if (faltando.length) throw new Error(`o patch não cobre: ${faltando.slice(0, 20).join(", ")}`);
+    // Confirmação 2: o patch existe, não está vazio e aplica limpo sobre o HEAD.
+    if (!fs.existsSync(arquivo) || fs.statSync(arquivo).size === 0) throw new Error("o patch ficou vazio");
+    git(mesa.caminho, ["read-tree", "HEAD"], { env });
+    git(mesa.caminho, ["apply", "--cached", "--check", "--", arquivo], { env });
+  } catch (erro) {
+    try { fs.unlinkSync(arquivo); } catch {}
+    throw new Error(`Recusado: não consegui salvar o trabalho não commitado (${erro.message}). Nada foi apagado.`);
+  } finally {
+    for (const f of [indice, `${indice}.lock`]) try { fs.unlinkSync(f); } catch {}
+  }
+  return { arquivo, head };
+}
+
+function arquivarBranch(raiz, branch) {
+  const tag = `archive/${new Date().toLocaleDateString("sv-SE").replaceAll("-", "")}/${branch}`;
+  const ponta = git(raiz, ["rev-parse", "--verify", "--end-of-options", `refs/heads/${branch}^{commit}`]);
+  const alvo = () => git(raiz, ["rev-parse", "--verify", "--quiet", "--end-of-options", `refs/tags/${tag}^{commit}`], { permitirFalha: true });
+  const existente = alvo();
+  if (existente === null) git(raiz, ["tag", tag, ponta]);
+  else if (existente !== ponta) throw new Error(`Recusado: a tag ${tag} já existe e aponta para outro commit. Nada foi apagado.`);
+  if (alvo() !== ponta) throw new Error(`Recusado: não consegui confirmar a tag ${tag}. Nada foi apagado.`);
+  return tag;
+}
+
 function auditar(opcoes) {
   const { raiz, mesas } = listarMesas(opcoes.repo);
   atualizarBase(raiz, opcoes.base);
@@ -272,15 +356,31 @@ function desmontar(opcoes) {
   const mesa = mesas.find((m) => m.branch === branch);
   if (!mesa) throw new Error(`Recusado: mesa para '${branch}' não encontrada.`);
 
+  // Fail-closed: se o git não responde, não sabemos se há trabalho ali, então nada é apagado.
   const sujos = sujeira(mesa.caminho);
-  if (sujos && sujos.length && !opcoes.salvarSujo) {
+  if (sujos === null) throw new Error(`Recusado: não consegui verificar se a mesa '${branch}' tem trabalho não salvo (git status falhou). Nada foi apagado.`);
+  const ignorados = ignoradosImportantes(mesa.caminho, raiz);
+  if (ignorados === null) throw new Error(`Recusado: não consegui verificar os arquivos ignorados da mesa '${branch}'. Nada foi apagado.`);
+  if (ignorados.length && !opcoes.descartarIgnorados) {
+    const lista = ignorados.slice(0, 20).join(", ") + (ignorados.length > 20 ? `, ... (+${ignorados.length - 20})` : "");
+    throw new Error(`Recusado: a mesa tem ${ignorados.length} arquivo(s) ignorado(s) pelo git que só existem nela e seriam perdidos: ${lista}. Copie-os para fora da mesa ou use --descartar-ignorados.`);
+  }
+  if (sujos.length && !opcoes.salvarSujo) {
     throw new Error(`Recusado: a mesa tem ${sujos.length} arquivo(s) não salvos. Use --salvar-sujo <pasta> ou descarte manualmente.`);
   }
 
+  // Tudo que precisa ser preservado é salvo e confirmado ANTES de qualquer remoção.
+  const salvo = sujos.length ? salvarSujo(mesa, branch, opcoes.salvarSujo) : null;
+  const tag = opcoes.arquivar ? arquivarBranch(raiz, branch) : null;
+
   desmontarComRetry(raiz, mesa.caminho);
-  git(raiz, ["branch", "-d", branch], { permitirFalha: true });
-  console.log(`Mesa desmontada com sucesso: ${branch}`);
-  return { desmontada: true };
+  const branchApagada = git(raiz, ["branch", "-d", branch], { permitirFalha: true }) !== null;
+  const linhas = [`Mesa desmontada com sucesso: ${branch}`];
+  if (salvo) linhas.push(`Trabalho não commitado salvo em: ${salvo.arquivo}`, `  Para recuperar (sobre o commit ${salvo.head.slice(0, 7)}): git apply --index "${salvo.arquivo}"`);
+  if (tag) linhas.push(`Branch arquivada na tag: ${tag}`);
+  if (!branchApagada) linhas.push(`Branch mantida: '${branch}' tem commits fora da branch atual (git branch -d recusou).`);
+  console.log(linhas.join("\n"));
+  return { desmontada: true, patch: salvo?.arquivo ?? null, tag };
 }
 
 function registrarTarefa(arquivo, linha) {
@@ -319,7 +419,7 @@ function criar(opcoes) {
   if (fs.existsSync(destino)) throw new Error(`Recusado: a pasta ${destino} já existe.`);
   atualizarBase(raiz, opcoes.base);
   
-  let sha = git(raiz, ["rev-parse", "--verify", `${opcoes.base}^{commit}`], { permitirFalha: true });
+  let sha = git(raiz, ["rev-parse", "--verify", "--end-of-options", `${opcoes.base}^{commit}`], { permitirFalha: true });
   if (!sha) {
     sha = git(raiz, ["rev-parse", "--verify", `HEAD^{commit}`]);
   }
@@ -352,6 +452,7 @@ if (!opcoes.repo || !["auditar", "desmontar", "mover", "criar"].includes(opcoes.
 
 try {
   const acoes = { auditar, desmontar, criar };
+  validarBase(opcoes.base);
   const resultado = acoes[opcoes.comando](opcoes);
   process.exit(opcoes.comando === "auditar" && resultado?.acimaDoLimite ? 3 : 0);
 } catch (erro) {
