@@ -174,3 +174,47 @@ test("seguranca --base: base bem formada com remoto inexistente nao quebra o flu
   const r = rodarMesa(["auditar", "--repo", raiz, "--registro", path.join(raiz, "TASK_REGISTRY.md"), "--base", "upstream/release/v2"]);
   assert.equal(r.codigo, 0, `Base bem formada deveria ser aceita: ${r.saida}`);
 });
+
+test("desmontar fail-closed: status maior que 1MB (ENOBUFS) nao pode virar 'mesa limpa'", () => {
+  const { raiz, rodarMesa } = criarAmbienteRepo();
+  const pastaMesa = criarMesa(rodarMesa, raiz, "enobufs-20261029");
+  const pasta = path.join(pastaMesa, "muitos");
+  fs.mkdirSync(pasta);
+  const sufixo = "x".repeat(80);
+  for (let i = 0; i < 14000; i++) fs.writeFileSync(path.join(pasta, `arquivo-${i}-${sufixo}.txt`), "");
+
+  const r = rodarMesa(["desmontar", "--repo", raiz, "--branch", "task/enobufs-20261029"]);
+  assert.equal(r.codigo, 1, `Mesa suja deveria ser recusada: ${r.saida}`);
+  assert.match(r.saida, /14000 arquivo\(s\) não salvos/, "O status grande deve ser lido inteiro, não virar erro");
+  assert.equal(fs.existsSync(pastaMesa), true, "Arquivos não salvos NUNCA podem ser apagados");
+  assert.equal(fs.readdirSync(pasta).length, 14000);
+});
+
+test("desmontar fail-closed: se o git nao consegue verificar a sujeira, recusa", () => {
+  const { raiz, rodarMesa } = criarAmbienteRepo();
+  const pastaMesa = criarMesa(rodarMesa, raiz, "index-corrompido-20261029");
+  fs.writeFileSync(path.join(pastaMesa, "trabalho.txt"), "trabalho nao salvo\n");
+  fs.writeFileSync(path.join(raiz, ".git", "worktrees", "index-corrompido-20261029", "index"), "lixo que nao e um index");
+
+  const r = rodarMesa(["desmontar", "--repo", raiz, "--branch", "task/index-corrompido-20261029"]);
+  assert.equal(r.codigo, 1, `Deveria recusar quando não dá para verificar: ${r.saida}`);
+  assert.match(r.saida, /não consegui verificar/);
+  assert.equal(fs.existsSync(path.join(pastaMesa, "trabalho.txt")), true, "Trabalho não salvo NUNCA pode ser apagado");
+});
+
+test("desmontar: avisa e recusa quando ha arquivos ignorados importantes (.env.local)", () => {
+  const { raiz, rodarMesa } = criarAmbienteRepo();
+  fs.appendFileSync(path.join(raiz, ".git", "info", "exclude"), ".env.local\n");
+  const pastaMesa = criarMesa(rodarMesa, raiz, "ignorados-20261029");
+  fs.writeFileSync(path.join(pastaMesa, ".env.local"), "SEGREDO=so-existe-aqui\n");
+
+  const r = rodarMesa(["desmontar", "--repo", raiz, "--branch", "task/ignorados-20261029"]);
+  assert.equal(r.codigo, 1, `Deveria recusar por causa do .env.local: ${r.saida}`);
+  assert.match(r.saida, /\.env\.local/);
+  assert.doesNotMatch(r.saida, /so-existe-aqui/, "O conteúdo do arquivo ignorado nunca pode aparecer na saída");
+  assert.equal(fs.existsSync(path.join(pastaMesa, ".env.local")), true);
+
+  const rConfirmado = rodarMesa(["desmontar", "--repo", raiz, "--branch", "task/ignorados-20261029", "--descartar-ignorados"]);
+  assert.equal(rConfirmado.codigo, 0, `Com --descartar-ignorados deveria prosseguir: ${rConfirmado.saida}`);
+  assert.equal(fs.existsSync(pastaMesa), false);
+});

@@ -18,6 +18,8 @@ const NOME_DE_AGENTE = /^(codex|claude|gemini)\/.+$|^agente\/(claude|gemini|code
 const AGENTE = /\b(?:claude|codex|gemini)-(?:local|vps)\b|[a-z0-9_-]+/i;
 // --base vira argumento do git: só "<remoto>/<ref>" ou "<ref>", com segmentos que não começam por "-" ou "." (bloqueia --upload-pack=..., ext::...).
 const BASE_VALIDA = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
+// O maxBuffer padrão (1MB) estoura (ENOBUFS) em mesas com muitos arquivos; ainda assim, erro nunca vale como "limpo".
+const MAX_SAIDA_GIT = 256 * 1024 * 1024;
 
 function resolverRegistroPadrao(repo) {
   const candidatos = [
@@ -34,7 +36,7 @@ function resolverRegistroPadrao(repo) {
 
 function git(cwd, args, { permitirFalha = false } = {}) {
   try {
-    return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trimEnd();
+    return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, maxBuffer: MAX_SAIDA_GIT }).trimEnd();
   } catch (erro) {
     if (permitirFalha) return null;
     throw new Error(`git ${args.join(" ")} falhou: ${(erro.stderr || erro.message).trim()}`);
@@ -82,7 +84,7 @@ const ARQUIVO_DE_BUILD = /(^|\/)next-env\.d\.ts$|\.tsbuildinfo$/;
 
 function ignoradosImportantes(caminho, raizPrincipal = caminho) {
   const linhas = git(caminho, ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"], { permitirFalha: true });
-  if (linhas === null) return [];
+  if (linhas === null) return null;
   const candidatos = linhas.split(/\r?\n/).filter((l) => l.startsWith("!! ")).map((l) => l.slice(3)).filter((c) => {
     const topo = c.split("/")[0];
     return !REGENERAVEIS.has(topo) && !ARQUIVO_DE_BUILD.test(c);
@@ -285,8 +287,16 @@ function desmontar(opcoes) {
   const mesa = mesas.find((m) => m.branch === branch);
   if (!mesa) throw new Error(`Recusado: mesa para '${branch}' não encontrada.`);
 
+  // Fail-closed: se o git não responde, não sabemos se há trabalho ali, então nada é apagado.
   const sujos = sujeira(mesa.caminho);
-  if (sujos && sujos.length && !opcoes.salvarSujo) {
+  if (sujos === null) throw new Error(`Recusado: não consegui verificar se a mesa '${branch}' tem trabalho não salvo (git status falhou). Nada foi apagado.`);
+  const ignorados = ignoradosImportantes(mesa.caminho, raiz);
+  if (ignorados === null) throw new Error(`Recusado: não consegui verificar os arquivos ignorados da mesa '${branch}'. Nada foi apagado.`);
+  if (ignorados.length && !opcoes.descartarIgnorados) {
+    const lista = ignorados.slice(0, 20).join(", ") + (ignorados.length > 20 ? `, ... (+${ignorados.length - 20})` : "");
+    throw new Error(`Recusado: a mesa tem ${ignorados.length} arquivo(s) ignorado(s) pelo git que só existem nela e seriam perdidos: ${lista}. Copie-os para fora da mesa ou use --descartar-ignorados.`);
+  }
+  if (sujos.length && !opcoes.salvarSujo) {
     throw new Error(`Recusado: a mesa tem ${sujos.length} arquivo(s) não salvos. Use --salvar-sujo <pasta> ou descarte manualmente.`);
   }
 
