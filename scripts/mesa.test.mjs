@@ -218,3 +218,76 @@ test("desmontar: avisa e recusa quando ha arquivos ignorados importantes (.env.l
   assert.equal(rConfirmado.codigo, 0, `Com --descartar-ignorados deveria prosseguir: ${rConfirmado.saida}`);
   assert.equal(fs.existsSync(pastaMesa), false);
 });
+
+test("desmontar --salvar-sujo: grava patch aplicavel com alteracoes, staged e arquivos novos antes de remover", () => {
+  const { raiz, rodarMesa } = criarAmbienteRepo();
+  const pastaMesa = criarMesa(rodarMesa, raiz, "salvar-sujo-20261029");
+  fs.writeFileSync(path.join(pastaMesa, "README.md"), "# Test Repo\nlinha nova que nao pode sumir\n");
+  fs.writeFileSync(path.join(pastaMesa, "staged.txt"), "arquivo no index\n");
+  execFileSync("git", ["-C", pastaMesa, "add", "staged.txt"]);
+  fs.mkdirSync(path.join(pastaMesa, "src"));
+  fs.writeFileSync(path.join(pastaMesa, "src", "novo.txt"), "arquivo novo nao rastreado\n");
+  fs.writeFileSync(path.join(pastaMesa, "binario.bin"), Buffer.from([0, 1, 2, 255, 0, 7]));
+
+  const salvos = fs.mkdtempSync(path.join(os.tmpdir(), "vibe-dev-salvos-"));
+  const r = rodarMesa(["desmontar", "--repo", raiz, "--branch", "task/salvar-sujo-20261029", "--salvar-sujo", salvos]);
+  assert.equal(r.codigo, 0, `Desmontar com --salvar-sujo falhou: ${r.saida}`);
+  assert.equal(fs.existsSync(pastaMesa), false, "A worktree deve ser removida depois de salvar");
+
+  const patches = fs.readdirSync(salvos).filter((f) => f.endsWith(".patch"));
+  assert.equal(patches.length, 1, `Deveria existir exatamente um patch salvo, achei: ${patches}`);
+  const patch = path.join(salvos, patches[0]);
+  assert.ok(r.saida.includes(patches[0]), "A saída deve dizer onde o patch foi salvo");
+
+  // Prova de que o trabalho é recuperável: aplicar o patch na main (mesmo commit) devolve tudo.
+  execFileSync("git", ["-C", raiz, "apply", "--index", patch]);
+  const ler = (f) => fs.readFileSync(path.join(raiz, f), "utf8").replace(/\r\n/g, "\n");
+  assert.equal(ler("README.md"), "# Test Repo\nlinha nova que nao pode sumir\n");
+  assert.equal(ler("staged.txt"), "arquivo no index\n");
+  assert.equal(ler(path.join("src", "novo.txt")), "arquivo novo nao rastreado\n");
+  assert.deepEqual([...fs.readFileSync(path.join(raiz, "binario.bin"))], [0, 1, 2, 255, 0, 7]);
+});
+
+test("desmontar --salvar-sujo: recusa pasta de destino dentro da propria mesa", () => {
+  const { raiz, rodarMesa } = criarAmbienteRepo();
+  const pastaMesa = criarMesa(rodarMesa, raiz, "salvar-dentro-20261029");
+  fs.writeFileSync(path.join(pastaMesa, "README.md"), "alterado\n");
+  const r = rodarMesa(["desmontar", "--repo", raiz, "--branch", "task/salvar-dentro-20261029", "--salvar-sujo", path.join(pastaMesa, "backup")]);
+  assert.equal(r.codigo, 1, `Deveria recusar salvar dentro da mesa: ${r.saida}`);
+  assert.equal(fs.existsSync(pastaMesa), true, "A mesa não pode ser removida");
+  assert.equal(fs.readFileSync(path.join(pastaMesa, "README.md"), "utf8"), "alterado\n");
+});
+
+test("desmontar --salvar-sujo: se o patch nao cobre tudo que esta sujo, recusa e nao apaga nada", () => {
+  const { raiz, rodarMesa } = criarAmbienteRepo();
+  const pastaMesa = criarMesa(rodarMesa, raiz, "patch-incompleto-20261029");
+  // Arquivo só no index e já apagado do disco ("AD"): o conteúdo staged não cabe num patch do working tree.
+  fs.writeFileSync(path.join(pastaMesa, "so-no-index.txt"), "conteudo que so existe no index\n");
+  execFileSync("git", ["-C", pastaMesa, "add", "so-no-index.txt"]);
+  fs.unlinkSync(path.join(pastaMesa, "so-no-index.txt"));
+
+  const salvos = fs.mkdtempSync(path.join(os.tmpdir(), "vibe-dev-salvos-"));
+  const r = rodarMesa(["desmontar", "--repo", raiz, "--branch", "task/patch-incompleto-20261029", "--salvar-sujo", salvos]);
+  assert.equal(r.codigo, 1, `Salvamento incompleto deveria recusar: ${r.saida}`);
+  assert.match(r.saida, /não consegui salvar/);
+  assert.equal(fs.existsSync(pastaMesa), true, "A mesa não pode ser removida");
+  assert.deepEqual(fs.readdirSync(salvos), [], "Patch incompleto não pode ficar parecendo backup válido");
+  const staged = execFileSync("git", ["-C", pastaMesa, "diff", "--cached", "--name-only"], { encoding: "utf8" }).trim();
+  assert.equal(staged, "so-no-index.txt", "O index real da mesa não pode ser alterado");
+});
+
+test("desmontar --arquivar: cria tag archive/<data>/<branch> apontando para a ponta da branch", () => {
+  const { raiz, rodarMesa } = criarAmbienteRepo();
+  const pastaMesa = criarMesa(rodarMesa, raiz, "arquivar-20261029");
+  fs.writeFileSync(path.join(pastaMesa, "feature.txt"), "commit que so existe na mesa\n");
+  execFileSync("git", ["-C", pastaMesa, "add", "feature.txt"]);
+  execFileSync("git", ["-C", pastaMesa, "commit", "-qm", "feature"]);
+  const ponta = execFileSync("git", ["-C", pastaMesa, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+  const r = rodarMesa(["desmontar", "--repo", raiz, "--branch", "task/arquivar-20261029", "--arquivar"]);
+  assert.equal(r.codigo, 0, `Desmontar com --arquivar falhou: ${r.saida}`);
+  const tags = execFileSync("git", ["-C", raiz, "tag", "--list", "archive/*/task/arquivar-20261029"], { encoding: "utf8" }).trim();
+  assert.match(tags, /^archive\/\d{8}\/task\/arquivar-20261029$/, `Tag de arquivo ausente: '${tags}'`);
+  const alvo = execFileSync("git", ["-C", raiz, "rev-parse", `${tags}^{commit}`], { encoding: "utf8" }).trim();
+  assert.equal(alvo, ponta);
+});
