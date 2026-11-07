@@ -7,8 +7,19 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "mesa.mjs");
-const onde = (exe) => path.dirname(execFileSync("where.exe", [exe], { encoding: "utf8" }).split(/\r?\n/)[0]);
-const PATH_BASE = [onde("git"), onde("node"), onde("pwsh"), path.join(process.env.SystemRoot, "System32")];
+const isWin = process.platform === "win32";
+const onde = (exe) => {
+  try {
+    const cmd = isWin ? "where.exe" : "which";
+    const res = execFileSync(cmd, [exe], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
+    return res ? path.dirname(res) : null;
+  } catch {
+    return null;
+  }
+};
+const PATH_BASE = isWin
+  ? [onde("git"), onde("node"), onde("pwsh"), process.env.SystemRoot ? path.join(process.env.SystemRoot, "System32") : null].filter(Boolean)
+  : (process.env.PATH || "").split(path.delimiter).filter(Boolean);
 
 function criarAmbienteRepo() {
   const raiz = fs.mkdtempSync(path.join(os.tmpdir(), "vibe-dev-test-"));
@@ -16,7 +27,7 @@ function criarAmbienteRepo() {
   execFileSync("git", ["-C", raiz, "config", "user.email", "dev@swarm.local"]);
   execFileSync("git", ["-C", raiz, "config", "user.name", "Swarm Dev"]);
 
-  fs.writeFileSync(path.join(raiz, ".gitignore"), ".worktrees/\nnode_modules/\n");
+  fs.writeFileSync(path.join(raiz, ".gitignore"), ".worktrees/\nnode_modules/\nnode_modules\n");
   fs.writeFileSync(path.join(raiz, "README.md"), "# Test Repo\n");
   
   // Criar pasta simulada de node_modules na raiz para testar junctions
@@ -28,9 +39,9 @@ function criarAmbienteRepo() {
   execFileSync("git", ["-C", raiz, "commit", "-qm", "commit inicial de teste"]);
 
   const rodarMesa = (args = [], envExtra = {}) => {
-    const env = { ...process.env, PATH: PATH_BASE.join(";"), ...envExtra };
+    const env = { ...process.env, PATH: PATH_BASE.join(path.delimiter), ...envExtra };
     const r = spawnSync(
-      "node",
+      process.execPath,
       [SCRIPT, ...args],
       { env, encoding: "utf8", cwd: raiz }
     );
